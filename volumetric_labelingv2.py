@@ -211,7 +211,7 @@ def change_label(event):
         smoothen_filter.value_slider.max = 1
         smoothen_filter.value_slider.value = 0
 
-#####################################################################################\
+######################################################################################
 
 ### Widget for using shapes to get segmentation
 from skimage.draw import polygon
