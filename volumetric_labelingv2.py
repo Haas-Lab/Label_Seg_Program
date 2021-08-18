@@ -12,11 +12,8 @@ from skimage import morphology
 import napari
 from napari.types import ImageData, LabelsData, LayerDataTuple, ShapesData
 from napari.layers import Image, Layer, Labels, Shapes
+from magicgui.backends._qtpy import show_file_dialog
 from magicgui import magicgui
-
-# # import UI for stack selection
-import tkinter as tk
-from tkinter import filedialog
 
 # %gui qt5
 import os
@@ -316,10 +313,7 @@ def save_layer(image: ImageData, label: Labels, file_picker = 'N/A'):
 
 # file_path = os.path.join(neuron_dir,neuron_file)
 
-root = tk.Tk()
-root.withdraw()
-
-file_path = filedialog.askopenfilename()
+file_path = show_file_dialog()
 
 if os.path.splitext(file_path)[1] == '.h5':
     viewer = napari.Viewer()
