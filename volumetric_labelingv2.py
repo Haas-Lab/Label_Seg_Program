@@ -36,10 +36,11 @@ def adaptive_local_threshold(image, block_size):
 
     return filters.threshold_local(image, block_size)
 
-def gamma_level(image, gamma):
+'''def gamma_level(image, gamma):
     # gamma_level is a function that takes in an image and changes the contrast by scaling the image
     # by a factor "gamma".
     return exposure.adjust_gamma(image, gamma)
+    '''
 
 def global_threshold_method(image, Threshold_Method):
     # global_threshold_method is a function that allows a user to choose what kind of method to binarize
@@ -98,6 +99,9 @@ def despeckle_filter(image, filter_method, radius):
         closed = morphology.closing(tmp_img, footprint)
         return closed
 
+    if filter_method == 'None':
+        pass
+
 def returnMask(mask):
     global Z_MASK
     Z_MASK = mask
@@ -140,7 +144,7 @@ def threshold_widget(image: ImageData,
 
     if image is not None:
         # adjust the gamma levelz
-        label_img = gamma_level(image, gamma)
+        label_img = exposure.adjust_gamma(image, gamma)
 
         # go through the stack and perform the local threshold
         for curr_stack in range(np.shape(label_img)[0]):
