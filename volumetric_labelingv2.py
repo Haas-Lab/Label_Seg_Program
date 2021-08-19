@@ -1,7 +1,8 @@
 #### IMPORT LIBRARIES
 import h5py
 import numpy as np
-
+## TESTing
+# from saving import save_layer
 # import all skimage related stuff
 import skimage.io
 from skimage.measure import label
@@ -15,7 +16,6 @@ from napari.layers import Image, Layer, Labels, Shapes
 from magicgui.backends._qtpy import show_file_dialog
 from magicgui import magicgui
 
-# %gui qt5
 import os
 
 #### PROCESSING FUNCTIONS
@@ -30,14 +30,10 @@ NEURON_MASK = None
 def adaptive_local_threshold(image, block_size):
     # adaptive_local_threshold is a function that takes in an image and applies an odd-integer block size
     # kernel (or filter) and thresholds based on local spatial information.
+    for curr_stack in range(np.shape(image)[0]):
+            image[curr_stack] = filters.threshold_local(image[curr_stack], block_size)
+    return image
 
-    return filters.threshold_local(image, block_size)
-
-'''def gamma_level(image, gamma):
-    # gamma_level is a function that takes in an image and changes the contrast by scaling the image
-    # by a factor "gamma".
-    return exposure.adjust_gamma(image, gamma)
-    '''
 
 def global_threshold_method(image, Threshold_Method):
     # global_threshold_method is a function that allows a user to choose what kind of method to binarize
@@ -45,20 +41,19 @@ def global_threshold_method(image, Threshold_Method):
     # image.
     if Threshold_Method == 'None':
         pass
-
-    if Threshold_Method == 'Isodata':
+    elif Threshold_Method == 'Isodata':
         thresh = filters.threshold_isodata(image) # calculate threshold using isodata method
-    if Threshold_Method == 'Li':
+    elif Threshold_Method == 'Li':
         thresh = filters.threshold_li(image) # calculate threshold using isodata method
-    if Threshold_Method == 'Mean':
+    elif Threshold_Method == 'Mean':
         thresh = filters.threshold_mean(image) # calculate threshold using isodata method
-    if Threshold_Method == 'Minimum':
+    elif Threshold_Method == 'Minimum':
         thresh = filters.threshold_minimum(image)
-    if Threshold_Method == 'Otsu':
+    elif Threshold_Method == 'Otsu':
         thresh = filters.threshold_otsu(image)
-    if Threshold_Method == 'Yen':
+    elif Threshold_Method == 'Yen':
         thresh = filters.threshold_yen(image)
-    if Threshold_Method == 'Triangle':
+    elif Threshold_Method == 'Triangle':
         thresh = filters.threshold_triangle(image)
     else:
         thresh = 0
@@ -68,36 +63,36 @@ def global_threshold_method(image, Threshold_Method):
     return binary_labels(tmp_img)
 
 def despeckle_filter(image, filter_method, radius):
-    if filter_method == 'Erosion':
+    if filter_method == 'None':
+        return image
+
+    elif filter_method == 'Erosion':
         tmp_img = image.copy()
         footprint = morphology.disk(radius)
         footprint = footprint[None,:,:]
         eroded = morphology.erosion(tmp_img, footprint)
         return eroded
 
-    if filter_method == 'Dilation':
+    elif filter_method == 'Dilation':
         tmp_img = image.copy()
         footprint = morphology.disk(radius)
         footprint = footprint[None,:,:]
         dilated = morphology.dilation(tmp_img, footprint)
         return dilated
 
-    if filter_method == 'Opening':
+    elif filter_method == 'Opening':
         tmp_img = image.copy()
         footprint = morphology.disk(radius)
         footprint = footprint[None,:,:]
         opened = morphology.opening(tmp_img, footprint)
         return opened
 
-    if filter_method == 'Closing':
+    elif filter_method == 'Closing':
         tmp_img = image.copy()
         footprint = morphology.disk(radius)
         footprint = footprint[None,:,:]
         closed = morphology.closing(tmp_img, footprint)
         return closed
-
-    if filter_method == 'None':
-        pass
 
 def returnMask(mask):
     global Z_MASK
@@ -107,12 +102,10 @@ def returnMask(mask):
 def binary_labels(image):
     # function binary_labels labels the entire neuron and entries of the Image = 2. Later, 2 => 'Dendrites'
     labels_array = image.copy()
-
     neuron = labels_array * Z_MASK
     auto = labels_array * (1-Z_MASK)
     labels_array[neuron > 0] = 2
     labels_array[auto > 0] = 6
-
     labels_array = labels_array.astype('int')
 
     return labels_array
@@ -140,15 +133,15 @@ def threshold_widget(image: ImageData,
     #function threshold_widget does a series of image processing and thresholding to binarize the image and make a label
 
     if image is not None:
-        # adjust the gamma levelz
+        # Adjust the gamma levels to improve contrast for thresholding
         label_img = exposure.adjust_gamma(image, gamma)
 
-        # go through the stack and perform the local threshold
-        for curr_stack in range(np.shape(label_img)[0]):
-            label_img[curr_stack] = adaptive_local_threshold(label_img[curr_stack], block_size)
+        # Perform the local threshold
+        label_img = adaptive_local_threshold(label_img, block_size)
 
         # finally do a global threshold to calculate optimized value to make it black/white
         label_img = global_threshold_method(label_img, threshold_method)
+
         label_img = despeckle_filter(label_img, speckle_method, radius)
 
         return (label_img, {'name': 'neuron_label'}, 'labels')
@@ -251,12 +244,12 @@ def generate_neuron_volume():
 
 @magicgui(
     call_button = 'Save Layer',
-    file_picker = {"widget_type": 'FileEdit', 'value': 'N/A', 'mode': 'd'})
-def save_layer(image: ImageData, label: Labels, file_picker = 'N/A'):
-    folder_name = file_picker
+    file_picker = {"widget_type": 'FileEdit', 'value': 'N/A', 'mode': 'd'}) 
+
+def save_layer(image: ImageData, label: Labels, file_picker: str):
     file_str = os.path.splitext(os.path.basename(file_path))[0]
     h5_name = file_str + '.h5'
-    full_dir = os.path.join(folder_name, h5_name)
+    full_dir = os.path.join(file_picker, h5_name)
 
     if os.path.isfile(full_dir): # if the file exists and layer needs to be overwritten
         hf = h5py.File(full_dir, 'r+')
