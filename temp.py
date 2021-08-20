@@ -1,33 +1,8 @@
-from typing import Any
-import h5py
-import numpy as np
-
-# import all skimage related stuff
-import skimage.io
-from skimage.measure import label
-from skimage import filters, exposure, restoration
-from skimage import morphology
-
-# import all napari related stuff
-import napari
-from napari.types import ImageData, LabelsData, LayerDataTuple, ShapesData
-from napari.layers import Image, Layer, Labels, Shapes
-from magicgui.backends._qtpy import show_file_dialog
-from magicgui import magicgui
-
-import os
-
-'''def saveWidget(path):
-    global file_path
-    file_path = path
-
-    #return ( 
-    @magicgui(
+@magicgui(
     call_button = 'Save Layer',
-    file_picker = {"widget_type": 'FileEdit', 'value': 'N/A', 'mode': 'd'},
-    )'''
+    file_picker = {"widget_type": 'FileEdit', 'value': 'N/A', 'mode': 'd'}) 
 
-def save_layer(image: ImageData, label: Labels, file_picker: any, path):
+def save_layer(image: ImageData, label: Labels, file_picker: str, path):
     file_str = os.path.splitext(os.path.basename(path))[0]
     h5_name = file_str + '.h5'
     full_dir = os.path.join(file_picker, h5_name)
@@ -58,7 +33,7 @@ def save_layer(image: ImageData, label: Labels, file_picker: any, path):
                 'Noise' : 8,
         }
         label_dict = str(label_dict) # make dictionary as string in order to save into h5 file. Use ast library to return it back into dict
-            # initialize HDF5 file
+        # initialize HDF5 file
         hf =  h5py.File(full_dir, 'a')
         grp = hf.create_group("project_data")
 
@@ -80,5 +55,5 @@ def save_layer(image: ImageData, label: Labels, file_picker: any, path):
             print('Succesfully Saved Labeled Dictionary')
         except:
             print('Saving Label Dictionary Unsuccessful')  
-
-        hf.close() #)
+        
+        hf.close()
