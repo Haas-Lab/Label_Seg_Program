@@ -3,13 +3,8 @@ from re import X
 import h5py
 from h5py._hl.base import Empty
 import numpy as np
-<<<<<<< HEAD
-## TESTing
-# from saving import save_layer
-=======
 from numpy.lib import type_check
 
->>>>>>> main
 # import all skimage related stuff
 import skimage.io
 from skimage.measure import label
@@ -22,14 +17,11 @@ from napari.types import ImageData, LabelsData, LayerDataTuple, ShapesData
 from napari.layers import Image, Layer, Labels, Shapes
 from magicgui import magicgui
 
-<<<<<<< HEAD
-=======
 # # import UI for stack selection
 import tkinter as tk
 from tkinter import filedialog
 
 # %gui qt5
->>>>>>> main
 import os
 
 # import json for converting string to dictionary for labels and metadata

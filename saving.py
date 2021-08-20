@@ -17,16 +17,6 @@ from magicgui import magicgui
 
 import os
 
-'''def saveWidget(path):
-    global file_path
-    file_path = path
-
-    #return ( 
-    @magicgui(
-    call_button = 'Save Layer',
-    file_picker = {"widget_type": 'FileEdit', 'value': 'N/A', 'mode': 'd'},
-    )'''
-
 def save_layer(image: ImageData, label: Labels, file_picker: any, path):
     file_str = os.path.splitext(os.path.basename(path))[0]
     h5_name = file_str + '.h5'
@@ -81,4 +71,4 @@ def save_layer(image: ImageData, label: Labels, file_picker: any, path):
         except:
             print('Saving Label Dictionary Unsuccessful')  
 
-        hf.close() #)
+        hf.close()

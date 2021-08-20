@@ -234,7 +234,7 @@ def generate_neuron_volume():
     viewer.add_image(VOLUME, name = 'Neuron', blending='additive')
     viewer.window.add_dock_widget(smoothen_filter, name = 'Smoothen Filter')
     viewer.window.add_dock_widget(threshold_widget, name = 'Thresholding')
-    viewer.window.add_dock_widget(save_layer(path=file_path), name = 'Save Files')
+    viewer.window.add_dock_widget(save_layer(image = neuron_image, path=file_path), name = 'Save Files')
     # napari.run(max_loop_level = 2)
     
     
@@ -242,21 +242,17 @@ def generate_neuron_volume():
 
 #### WIDGET FOR SAVING LAYER AS H5 FILE
 
-file_path = show_file_dialog()
-
 from saving import save_layer
-@magicgui.magicgui(
-    function = save_layer(path = file_path),
+magicgui(
+    function = save_layer,
     call_button = 'Save Layer',
     file_picker = {"widget_type": 'FileEdit', 'value': 'N/A', 'mode': 'd'}
     )
-    
 
-#####################################################################################
-
-# file_path = os.path.join(neuron_dir,neuron_file)
+#########################################################################################
 
 
+file_path = show_file_dialog()
 
 if os.path.splitext(file_path)[1] == '.h5':
     viewer = napari.Viewer()
@@ -270,7 +266,7 @@ if os.path.splitext(file_path)[1] == '.h5':
     viewer.add_labels(label_layer, name = 'Neuron_label')
     viewer.window.add_dock_widget(smoothen_filter, name = 'Smoothen Filter')
     viewer.window.add_dock_widget(threshold_widget, name = 'Thresholding')
-    viewer.window.add_dock_widget(save_layer(path=file_path), name = 'Save Files')
+    viewer.window.add_dock_widget(save_layer(image = neuron_image,label=label_layer, file_picker=HELP, path=file_path), name = 'Save Files')
     napari.run()
     
 else:
