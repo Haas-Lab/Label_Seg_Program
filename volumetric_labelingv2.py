@@ -24,9 +24,6 @@ from tkinter import filedialog
 # %gui qt5
 import os
 
-# import json for converting string to dictionary for labels and metadata
-import ast
-
 #### PROCESSING FUNCTIONS
 # GLOBAL VARIABLES
 global VOLUME
@@ -309,6 +306,7 @@ def save_layer(image: ImageData,
 
         if project_data.attrs.items() == (): #create metadata if there aren't any items
             project_data.attrs['completeness'] = completion_cond
+            project_data.attrs['labaler'] = labeler
 
         # make metadata for raw_image 
         if raw_image_data.attrs.items() == ():
@@ -318,12 +316,7 @@ def save_layer(image: ImageData,
            
         # make metadata for label data
         if curr_label.attrs.items() == (): # check if there are any attributes in the label data: if it returns empty list then start creating metadata
-
             print('Creating metadata set...')
-
-            # create labeler metadata 
-            curr_label.attrs['labeler'] = labeler
-            print('Created Metadata - Labeler: ' + labeler)
 
             # create metadata for subdomains for the label
             for k in label_dict.keys():
@@ -349,6 +342,10 @@ def save_layer(image: ImageData,
         hf =  h5py.File(full_dir, 'a')
         grp = hf.create_group("project_data")
         grp.attrs.create('completeness', completion_cond)
+        print('Creating metadata set...')
+        # create labeler metadata 
+        grp.attrs['labeler'] = labeler
+        print('Created Metadata - Labeler: ' + labeler)
 
         # save the raw image
         try:
@@ -364,11 +361,6 @@ def save_layer(image: ImageData,
             lab_data = grp.create_dataset('label', data = label.data)
             print('Successfully saved Labeled Data')
 
-            print('Creating metadata set...')
-            # create labeler metadata 
-            lab_data.attrs['labeler'] = labeler
-            print('Created Metadata - Labeler: ' + labeler)
-
             # create metadata for subdomains for the label
             for k in label_dict.keys():
                 lab_data.attrs[k] = label_dict[k]
@@ -377,9 +369,9 @@ def save_layer(image: ImageData,
             print('Saving Labeled Data Unsuccessful') 
         
         print('Created New Dataset and Following are the metadata saved: ')
-        print(grp.attrs.items())
-        print(im_data.attrs.items())
-        print(lab_data.attrs.items())
+        print(list(grp.attrs.items()))
+        print(list(im_data.attrs.items()))
+        print((lab_data.attrs.items()))
 
         hf.close()
 
