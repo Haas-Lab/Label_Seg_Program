@@ -234,7 +234,7 @@ def generate_neuron_volume():
     viewer.add_image(VOLUME, name = 'Neuron', blending='additive')
     viewer.window.add_dock_widget(smoothen_filter, name = 'Smoothen Filter')
     viewer.window.add_dock_widget(threshold_widget, name = 'Thresholding')
-    viewer.window.add_dock_widget(save_layer(image = neuron_image, path=file_path), name = 'Save Files')
+    viewer.window.add_dock_widget(save_layer(image = neuron_image,label=label_layer, file_picker=HELP, path=file_path), name = 'Save Files')
     # napari.run(max_loop_level = 2)
     
     

@@ -17,7 +17,7 @@ from magicgui import magicgui
 
 import os
 
-def save_layer(image: ImageData, label: Labels, file_picker: any, path):
+def save_layer(image: ImageData, label: Labels, path: any): ##, file_picker = 'N/A'):
     file_str = os.path.splitext(os.path.basename(path))[0]
     h5_name = file_str + '.h5'
     full_dir = os.path.join(file_picker, h5_name)
