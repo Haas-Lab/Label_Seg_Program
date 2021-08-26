@@ -17,10 +17,6 @@ from napari.types import ImageData, LabelsData, LayerDataTuple, ShapesData
 from napari.layers import Image, Layer, Labels, Shapes
 from magicgui import magicgui
 
-# # import UI for stack selection
-import tkinter as tk
-from tkinter import filedialog
-
 # %gui qt5
 import os
 
@@ -244,8 +240,8 @@ def generate_neuron_volume():
     viewer.window.add_dock_widget(threshold_widget, name = 'Thresholding')
     viewer.window.add_dock_widget(save_layer, name = 'Save Files')
     # napari.run(max_loop_level = 2)
-    
-    
+
+
 #####################################################################################
 
 #### WIDGET FOR SAVING LAYER AS H5 FILE
@@ -256,10 +252,10 @@ def generate_neuron_volume():
     Type_Name = {"widget_type": 'LineEdit', 'value': 'Enter Your Name'},
     Fluoro_Name = {"choices": ['EGFP-F','jYCaMP1', 'GluSnFR']},
 )
-def save_layer(image: ImageData, 
-                label: Labels, 
-                file_picker = 'N/A', 
-                Type_Name = 'Enter Your Name', 
+def save_layer(image: ImageData,
+                label: Labels,
+                file_picker = 'N/A',
+                Type_Name = 'Enter Your Name',
                 Fluoro_Name= 'EGFP-F',
                 is_complete = False):
 
@@ -268,7 +264,7 @@ def save_layer(image: ImageData,
     type(labeler)
     type(Fluoro_Name)
     file_str = os.path.splitext(os.path.basename(file_path))[0]
-    h5_name = file_str + '.h5'
+    h5_name = file_str + "_"+ labeler.encode().hex()[:8] + '.h5'
     full_dir = os.path.join(folder_name, h5_name)
 
     if is_complete:
@@ -289,7 +285,7 @@ def save_layer(image: ImageData,
         }
 
     if os.path.isfile(full_dir): # if the file exists and layer needs to be overwritten
-        
+
         hf = h5py.File(full_dir, 'r+')
 
         project_data = hf['project_data'] # access the project_data group
@@ -308,12 +304,12 @@ def save_layer(image: ImageData,
             project_data.attrs['completeness'] = completion_cond
             project_data.attrs['labaler'] = labeler
 
-        # make metadata for raw_image 
+        # make metadata for raw_image
         if raw_image_data.attrs.items() == ():
             # create fluorophore metadata
             raw_image_data.attrs['fluorophore'] = Fluoro_Name
             print('Created Metadata - Fluorophore: ' + Fluoro_Name)
-           
+
         # make metadata for label data
         if curr_label.attrs.items() == (): # check if there are any attributes in the label data: if it returns empty list then start creating metadata
             print('Creating metadata set...')
@@ -322,12 +318,12 @@ def save_layer(image: ImageData,
             for k in label_dict.keys():
                 curr_label.attrs[k] = label_dict[k]
                 print('Created Metadata - subdomain: ' + k)
-        
+
         # check if changes were properly made:
         hf = h5py.File(full_dir, 'r+')
         if np.allclose(hf['project_data']['label'], new_label):
             print('Label Successfully Overwritten: Current label is now saved into project_data group.')
-        
+
         hf.close()
 
         print('Updated Metadata or have Created new metadata only: ')
@@ -337,13 +333,13 @@ def save_layer(image: ImageData,
         hf.close()
 
     else: # for if the file doesn't exist yet, create the h5 file
-    
+
         # initialize HDF5 file
         hf =  h5py.File(full_dir, 'a')
         grp = hf.create_group("project_data")
         grp.attrs.create('completeness', completion_cond)
         print('Creating metadata set...')
-        # create labeler metadata 
+        # create labeler metadata
         grp.attrs['labeler'] = labeler
         print('Created Metadata - Labeler: ' + labeler)
 
@@ -354,7 +350,7 @@ def save_layer(image: ImageData,
             im_data.attrs['fluorophore'] = Fluoro_Name
             print('Created Metadata - Fluorophore: ' + Fluoro_Name)
         except:
-            print('Saving Raw Data Unsuccessful')   
+            print('Saving Raw Data Unsuccessful')
 
         # save the label and corresponding metadata
         try:
@@ -366,8 +362,8 @@ def save_layer(image: ImageData,
                 lab_data.attrs[k] = label_dict[k]
                 print('Created Metadata - subdomain: ' + k)
         except:
-            print('Saving Labeled Data Unsuccessful') 
-        
+            print('Saving Labeled Data Unsuccessful')
+
         print('Created New Dataset and Following are the metadata saved: ')
         print(list(grp.attrs.items()))
         print(list(im_data.attrs.items()))
@@ -393,11 +389,9 @@ if os.path.splitext(file_path)[1] == '.h5':
 
     viewer.add_image(neuron_image, name = 'Neuron')
     viewer.add_labels(label_layer, name = 'Neuron_label')
-    viewer.window.add_dock_widget(smoothen_filter, name = 'Smoothen Filter')
-    viewer.window.add_dock_widget(threshold_widget, name = 'Thresholding')
     viewer.window.add_dock_widget(save_layer, name = 'Save Files')
     napari.run()
-    
+
 else:
     z_projection_made = False
     neuron_image = skimage.io.imread(file_path)
