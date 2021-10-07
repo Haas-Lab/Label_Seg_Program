@@ -1,16 +1,19 @@
 #### IMPORT LIBRARIES
+import h5py
+import numpy as np
+
 from logging import captureWarnings
 from re import X
-import h5py
 from h5py._hl.base import Empty
-import numpy as np
 from numpy.lib import type_check
+from scipy import ndimage
 
 # import all skimage related stuff
 import skimage.io
 from skimage.measure import label
-from skimage import filters, exposure, restoration
+from skimage import filters, exposure, restoration, registration
 from skimage import morphology
+
 
 # import all napari related stuff
 import napari
@@ -19,15 +22,16 @@ from napari.layers import Image, Layer, Labels, Shapes
 from magicgui import magicgui
 
 # # import UI for stack selection
-import tkinter as tk
-from tkinter import filedialog
 from magicgui.backends._qtpy import show_file_dialog
 
 # %gui qt5
 import os
 
-# import all subprocess to run ilastik 
+# import all subprocess to run ilastik
 import subprocess
+
+from aicsimageio import AICSImage, imread
+from skimage.io import imsave
 
 #### PROCESSING FUNCTIONS
 # GLOBAL VARIABLES
@@ -227,16 +231,19 @@ def run_ilastik() -> LayerDataTuple:
     IMAGE = show_file_dialog(caption = 'choose your image')
     BASENAME = os.path.basename(IMAGE)
 
-    # Ilastik Install Location 
-    ILASTIK_LOC = show_file_dialog(caption = 'choose where ilastik applciation is')
-
-    # Neuron Segmentation 
-    # ILASTIK_PRO_NEURON = show_file_dialog(caption = 'choose ilastik file for neuron segmentation', 
+    # Ilastik Install Location
+    #ILASTIK_LOC = show_file_dialog(caption = 'choose where ilastik applciation is')
+    ILASTIK_LOC = '/home/peter/Applications/ilastik-1.3.3post3-Linux/run_ilastik.sh'
+    # Neuron Segmentation
+    # ILASTIK_PRO_NEURON = show_file_dialog(caption = 'choose ilastik file for neuron segmentation',
     #                                       filter = '.ilp')
 
-    # Neuronal Subdomain Classifier 
-    ILASTIK_PRO_SUB = show_file_dialog(caption = 'choose ilastik file for neuron subdomain classification')
-    
+    # Neuronal Subdomain Classifier
+    #ILASTIK_PRO_SUB = show_file_dialog(caption = 'choose ilastik file for neuron subdomain classification')
+
+    ILASTIK_PRO_NEURON = "/home/peter/Applications/DynaROI/Ilastik_Tectal_Neuron_Autocontext/tectal_neuron_auto.ilp"
+    ILASTIK_PRO_SUB = '/home/peter/Applications/DynaROI/Subdomain_Training_Stacks/Subdomain_Classifier.ilp'
+
     # STEP 1: Run the pixel classifier for general structure of the neuron
 
     '''
@@ -246,10 +253,10 @@ def run_ilastik() -> LayerDataTuple:
                '--headless',
                '--project='+ILASTIK_PRO_NEURON,
                '--export_source=probabilities stage 2',
-               IMAGE, 
-               '--output_filename_format=results/{nickname}_neuron_seg.h5'               
+               IMAGE,
+               '--output_filename_format=results/{nickname}_neuron_seg.h5'
                ]
-    subprocess.run(launch_args) 
+    subprocess.run(launch_args)
     print('finished ilastik classification')
 
     pixel_classifier = h5py.File("results/"+BASENAME[:-4]+"_neuron_seg.h5", 'r') # read in pixel classifier results
@@ -261,7 +268,7 @@ def run_ilastik() -> LayerDataTuple:
     neuron_seg = masks[:,:,:,1].copy()
     neuron_seg[neuron_seg<.85]=0 # only accept probabilities that are less than 85%
 
-    masked_neuron = neuron_seg * image 
+    masked_neuron = neuron_seg * image
 
     '''
 
@@ -270,12 +277,39 @@ def run_ilastik() -> LayerDataTuple:
     print('Running Ilastik Classifier for Subregions')
     launch_args = [ILASTIK_LOC,
             '--headless',
-            '--project='+ILASTIK_PRO_SUB,
-            '--export_source=probabilities',
-            'results/neuron_seg_'+BASENAME, 
-            '--output_filename_format=results/{nickname}_sub_seg.h5'               
-            ]
+            '--project='+ILASTIK_PRO_NEURON,
+            '--export_source=probabilities stage 2',
+            IMAGE,
+            '--output_filename_format=results/{nickname}_neuron_seg.h5'
+                       ]
+
     subprocess.run(launch_args)
+    pixel_classifier = h5py.File("results/"+BASENAME[:-4]+"_neuron_seg.h5", 'r')
+    data1 = imread(IMAGE)
+    base_image = imread(IMAGE)
+
+    image = data1[0,0,:,:,:]
+    image = image[0,:,:,:]
+    masks = pixel_classifier['exported_data']
+    neuron_seg = masks[:,:,:,1].copy()
+    neuron_seg[neuron_seg<.85]=0
+
+    masked_neuron = neuron_seg * image
+    # Save the segemented image to use in subdomain classification
+    imsave('results/neuron_seg_'+BASENAME, masked_neuron)
+
+    launch_args = [ILASTIK_LOC,
+                   '--headless',
+                   '--project='+ILASTIK_PRO_SUB,
+                   '--export_source=probabilities',
+                   'results/neuron_seg_'+BASENAME,
+                   '--output_filename_format=results/{nickname}_sub_seg.h5'
+                   ]
+
+
+
+    subprocess.run(launch_args)
+
     print('Finished running classifier')
 
     pixel_classifier = h5py.File("results/neuron_seg_"+BASENAME[:-4]+"_sub_seg.h5", 'r')
@@ -287,23 +321,29 @@ def run_ilastik() -> LayerDataTuple:
 
     # extract soma from mask
     soma = masks[:,:,:,1].copy()
-    soma[soma<.70]=0
-    soma[soma > 0] = 1 # 
-    
+    soma[soma<.90]=0
+    soma[soma > 0] = 1 #
+
     # extract dendrite from mask
     dendrites =  masks[:,:,:,2].copy()
-    dendrites[dendrites<.75]=0
+    dendrites[dendrites<.85]=0
     dendrites[dendrites > 0] = 2
 
-    # extract filopodia's 
+    # extract filopodia's
     filopodia =  masks[:,:,:,3].copy()
-    filopodia[filopodia<.45]=0
+    filopodia[filopodia<.8]=0
     filopodia[filopodia > 0] = 3
 
-    neuron_mask = np.ndarray(dendrites + filopodia)
+    neuron_mask = np.zeros_like(dendrites)
+    neuron_mask[dendrites==2] = 2
+    neuron_mask[soma==1] = 1
+    neuron_mask[filopodia==3] = 3
+
+    neuron_mask = neuron_mask.astype('int')
+    imsave('results/neuron_labels_'+BASENAME+'.tif', neuron_mask)
 
     return (neuron_mask, {'name': 'neuron_mask'}, 'labels')
-    
+
 
 #####################################################################################\
 
@@ -334,10 +374,11 @@ def generate_neuron_volume():
     viewer.add_image(VOLUME, name = 'Neuron', blending='additive')
     viewer.window.add_dock_widget(smoothen_filter, name = 'Smoothen Filter')
     viewer.window.add_dock_widget(threshold_widget, name = 'Thresholding')
-    viewer.window.add_dock_widget(run_ilastik, name = 'Ilastik Classifier (BETA)')
+    viewer.window.add_dock_widget(importPreviousLabels, name = 'Import From Last Time Point')
+    #viewer.window.add_dock_widget(run_ilastik, name = 'Ilastik Classifier (BETA)')
     viewer.window.add_dock_widget(save_layer, name = 'Save Files')
     # napari.run(max_loop_level = 2)
-    
+
 #####################################################################################
 
 #### WIDGET FOR SAVING LAYER AS H5 FILE
@@ -348,10 +389,10 @@ def generate_neuron_volume():
     Type_Name = {"widget_type": 'LineEdit', 'value': 'Enter Your Name'},
     Fluoro_Name = {"choices": ['EGFP-F','jYCaMP1', 'GluSnFR']},
 )
-def save_layer(image: ImageData, 
-                label: Labels, 
-                file_picker = 'N/A', 
-                Type_Name = 'Enter Your Name', 
+def save_layer(image: ImageData,
+                label: Labels,
+                file_picker = 'N/A',
+                Type_Name = 'Enter Your Name',
                 Fluoro_Name= 'EGFP-F',
                 is_complete = False):
 
@@ -381,7 +422,7 @@ def save_layer(image: ImageData,
         }
 
     if os.path.isfile(full_dir): # if the file exists and layer needs to be overwritten
-        
+
         hf = h5py.File(full_dir, 'r+')
 
         project_data = hf['project_data'] # access the project_data group
@@ -400,12 +441,12 @@ def save_layer(image: ImageData,
             project_data.attrs['completeness'] = completion_cond
             project_data.attrs['labaler'] = labeler
 
-        # make metadata for raw_image 
+        # make metadata for raw_image
         if raw_image_data.attrs.items() == ():
             # create fluorophore metadata
             raw_image_data.attrs['fluorophore'] = Fluoro_Name
             print('Created Metadata - Fluorophore: ' + Fluoro_Name)
-           
+
         # make metadata for label data
         if curr_label.attrs.items() == (): # check if there are any attributes in the label data: if it returns empty list then start creating metadata
             print('Creating metadata set...')
@@ -414,7 +455,7 @@ def save_layer(image: ImageData,
             for k in label_dict.keys():
                 curr_label.attrs[k] = label_dict[k]
                 print('Created Metadata - subdomain: ' + k)
-        
+
         print('Updated Metadata or have Created new metadata only: ')
         print(list(project_data.attrs.items()))
         print(list(raw_image_data.attrs.items()))
@@ -433,11 +474,11 @@ def save_layer(image: ImageData,
         h5_name = file_str + "_"+ labeler.encode().hex()[:8] + '.h5'
         full_dir = os.path.join(folder_name, h5_name)
         hf =  h5py.File(full_dir, 'a')
-        
+
         grp = hf.create_group("project_data")
         grp.attrs.create('completeness', completion_cond)
         print('Creating metadata set...')
-        # create labeler metadata 
+        # create labeler metadata
         grp.attrs['labeler'] = labeler
         print('Created Metadata - Labeler: ' + labeler)
 
@@ -448,7 +489,7 @@ def save_layer(image: ImageData,
             im_data.attrs['fluorophore'] = Fluoro_Name
             print('Created Metadata - Fluorophore: ' + Fluoro_Name)
         except:
-            print('Saving Raw Data Unsuccessful')   
+            print('Saving Raw Data Unsuccessful')
 
         # save the label and corresponding metadata
         try:
@@ -460,8 +501,8 @@ def save_layer(image: ImageData,
                 lab_data.attrs[k] = label_dict[k]
                 print('Created Metadata - subdomain: ' + k)
         except:
-            print('Saving Labeled Data Unsuccessful') 
-        
+            print('Saving Labeled Data Unsuccessful')
+
         print('Created New Dataset and Following are the metadata saved: ')
         print(list(grp.attrs.items()))
         print(list(im_data.attrs.items()))
@@ -470,7 +511,24 @@ def save_layer(image: ImageData,
         hf.close()
 
 #####################################################################################
+@magicgui(
+    file_picker = {"widget_type": 'FileEdit', 'value': 'N/A' }
+)
+def importPreviousLabels(image: ImageData, file_picker = 'N/A')-> LayerDataTuple:
+    previous_time = h5py.File(file_picker, 'r+')
+    # load in the image and label and add to viewer
+    last_image = np.array(previous_time['project_data'].get('raw_image'))
+    last_label = np.array(previous_time['project_data'].get('label'))
+    previous_time.close()
+    upsampleFactor=1
+    shifts = registration.phase_cross_correlation(image, last_image, upsample_factor=upsampleFactor, return_error=False)
+    print(shifts)
+    new_labels = ndimage.shift(last_label, shifts)
+    new_labels = new_labels.astype('int')
 
+    return (new_labels, {'name': 'neuron_label'}, 'labels')
+
+#####################################################################################
 # file_path = os.path.join(neuron_dir,neuron_file)
 
 file_path = show_file_dialog()
@@ -489,7 +547,7 @@ if os.path.splitext(file_path)[1] == '.h5':
     viewer.window.add_dock_widget(threshold_widget, name = 'Thresholding')
     viewer.window.add_dock_widget(save_layer, name = 'Save Files')
     napari.run()
-    
+
 else:
     z_projection_made = False
     neuron_image = skimage.io.imread(file_path)
