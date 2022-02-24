@@ -127,6 +127,13 @@ def binary_labels(image):
 
     return labels_array
 
+# Offset correction
+def returnOffsetCorr(image):
+    if np.min(image)<0:
+        image = image - np.min(image)
+    return image
+
+
 
 #### MAIN WIDGET/PROGRAM HERE
 
@@ -150,6 +157,9 @@ def threshold_widget(image: ImageData,
 
     if image is not None:
         # adjust the gamma levelz
+        if np.min(image) < 0:
+            image = returnOffsetCorr(image)
+
         label_img = gamma_level(image, gamma)
 
         # go through the stack and perform the local threshold
