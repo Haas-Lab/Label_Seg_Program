@@ -492,7 +492,7 @@ def generate_neuron_volume():
     z_projection_viewer.close()
 
     viewer = napari.Viewer()
-    viewer.add_image(VOLUME, name = 'Neuron', blending='additive')
+    viewer.add_image(VOLUME, name = 'Neuron', blending='translucent_no_depth')
     viewer.window.add_dock_widget(smoothen_filter, name = 'Smoothen Filter')
     viewer.window.add_dock_widget(threshold_neuron_widget, name = 'Thresholding')
     viewer.window.add_dock_widget(importPreviousLabels, name = 'Import From Last Time Point')
