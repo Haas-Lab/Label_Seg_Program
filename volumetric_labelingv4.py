@@ -29,6 +29,7 @@ import napari
 from napari.types import ImageData, LabelsData, LayerDataTuple, ShapesData
 from napari.layers import Image, Layer, Labels, Shapes
 from magicgui import magicgui
+from magicgui import widgets
 
 # %gui qt5
 # # import UI for stack selection
@@ -46,8 +47,6 @@ global VOLUME
 VOLUME= None
 global Z_MASK
 Z_MASK = 1
-global NEURON_MASK
-NEURON_MASK = None
 global NEURON
 NEURON = [0,0]
 global NOISE
@@ -56,6 +55,10 @@ global NEURON_LABLED
 NEURON_LABLED = False
 global NOISE_LABLED
 NOISE_LABLED = False
+global COMPLETED_LABEL
+COMPLETED_LABEL = None
+global EDIT_EXISTING_LABEL
+EDIT_EXISTING_LABEL = False
 
 def adaptive_local_threshold(image, block_size):
     # adaptive_local_threshold is a function that takes in an image and applies an odd-integer block size
@@ -154,9 +157,12 @@ def despeckle_filter(image, filter_method, radius):
         closed = morphology.closing(tmp_img, footprint)
         return closed
 
-def returnMask(mask):
+def returnMask(mask,vol_shape):
     global Z_MASK
-    Z_MASK = mask
+    tmp_mask = np.zeros(vol_shape)
+    for z in range(vol_shape[0]):
+        tmp_mask[z,...] = mask
+    Z_MASK = tmp_mask
     return Z_MASK
 
 def binary_labels(image, labelee):
@@ -211,7 +217,7 @@ def threshold_neuron_widget(image: ImageData,
                      ) -> LayerDataTuple:
     #function threshold_widget does a series of image processing and thresholding to binarize the neuron parts of the 
     #image and make a label while only affecting the noise or the neuron mask
-
+    print(affected)
     if image is not None:
 
         listOfGlobals = globals()
@@ -237,15 +243,14 @@ def threshold_neuron_widget(image: ImageData,
                 if threshold_method == "None":
                     label_img = model_img
                 else:
-                    
                     model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
                     tmp_label_img = to_categorical(label_img, num_classes=num_classes).astype(bool)
                     tmp_categorical = np.zeros(model_img.shape)
                     for i in range(num_classes):
                         if i == 0:
-                            tmp_categorical[...,i] = model_img[...,i]*tmp_label_img[...,i]
+                            tmp_categorical[...,i] = model_img[...,i]*tmp_label_img[...,i] # "AND" background
                         else:
-                            tmp_categorical[...,i] = model_img[...,i]+tmp_label_img[...,i]
+                            tmp_categorical[...,i] = model_img[...,i]+tmp_label_img[...,i] # "OR" every other label
 
                     label_img = np.argmax(tmp_categorical,axis=-1)
             
@@ -264,16 +269,27 @@ def threshold_neuron_widget(image: ImageData,
 
 
         global ENTIRE_IMAGE
-        if listOfGlobals['NEURON_LABLED']:
+        if EDIT_EXISTING_LABEL == True:
+            # ENTIRE_IMAGE = listOfGlobals['NOISE']
             if listOfGlobals['NOISE_LABLED']:
-                ENTIRE_IMAGE = np.add(listOfGlobals['NEURON'], listOfGlobals['NOISE'])
-                return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+                ENTIRE_IMAGE = np.add(listOfGlobals['COMPLETED_LABEL'],listOfGlobals['NOISE'])
+                return (ENTIRE_IMAGE, {'name': 'Neuron_label'}, 'labels')
             else:
-                ENTIRE_IMAGE = listOfGlobals['NEURON']
-                return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+                ENTIRE_IMAGE = COMPLETED_LABEL
+                return (ENTIRE_IMAGE, {'name': 'Neuron_label'}, 'labels')
+            # return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+
         else:
-            ENTIRE_IMAGE = listOfGlobals['NOISE']
-            return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+            if listOfGlobals['NEURON_LABLED']:
+                if listOfGlobals['NOISE_LABLED']:
+                    ENTIRE_IMAGE = np.add(listOfGlobals['NEURON'], listOfGlobals['NOISE'])
+                    return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+                else:
+                    ENTIRE_IMAGE = listOfGlobals['NEURON']
+                    return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+            else:
+                ENTIRE_IMAGE = listOfGlobals['NOISE']
+                return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
 
 
 #### WIDGET FOR PROCESSING IMAGE AND SHOWING THE PROCESSED IMAGE BEFORE SEGMENTATION
@@ -468,9 +484,34 @@ def run_ilastik() -> LayerDataTuple:
 
 #####################################################################################\
 
-### Widget for using shapes to get segmentation
-from skimage.draw import polygon
 
+from skimage.draw import polygon
+@magicgui(
+    image = {'label': 'Image'},
+    call_button = "Create Z-Projection",
+    layout = 'vertical'
+)
+def make_z_projection(image: ImageData):
+    z_projection = np.max(image, axis=0)
+    viewer.add_image(z_projection, name = 'Neuron Projection')
+    viewer.add_shapes()
+
+@magicgui(
+    call_button = "Generate Mask",
+    layout = 'vertical'
+)
+def generate_mask():
+
+    shape_mask = viewer.layers[-1].data[0]
+    px_coord = np.zeros(viewer.layers[-2].data.shape, dtype = np.uint8) # initialize map of rows and columns
+
+    rr, cc = polygon(shape_mask[:,0], shape_mask[:,1]) # get the rows and columns from polygon shape
+    px_coord[rr, cc] = 1 # set all the rows and columns in the matrix as 1
+    returnMask(px_coord, VOLUME.shape)
+
+    print("Mask Shape: ", Z_MASK.shape)
+
+### Widget for using shapes to get segmentation
 @magicgui(
     call_button = 'Generate Neuron Volume',
     layout = 'vertical'
@@ -484,7 +525,7 @@ def generate_neuron_volume():
     rr, cc = polygon(shape_mask[:,0], shape_mask[:,1]) # get the rows and columns from polygon shape
     px_coord[rr, cc] = 1 # set all the rows and columns in the matrix as 1
 
-    returnMask(px_coord)
+    returnMask(px_coord, VOLUME.shape)
 
     print("Mask Shape: ", Z_MASK.shape)
 
@@ -655,17 +696,25 @@ def importPreviousLabels(image: ImageData, file_picker = 'N/A')-> LayerDataTuple
 file_path = show_file_dialog()
 
 if os.path.splitext(file_path)[1] == '.h5':
+    EDIT_EXISTING_LABEL = True
+
     viewer = napari.Viewer()
     edit_labels = h5py.File(file_path, 'r+')
     # load in the image and label and add to viewer
     neuron_image = np.array(edit_labels['project_data'].get('raw_image'))
+    VOLUME = neuron_image.copy()
+
     label_layer = np.array(edit_labels['project_data'].get('label'))
+    COMPLETED_LABEL = label_layer
     edit_labels.close()
+
+    reviewer_edit_widget = widgets.Container(widgets=[make_z_projection, generate_mask])
 
     viewer.add_image(neuron_image, name = 'Neuron')
     viewer.add_labels(label_layer, name = 'Neuron_label')
     viewer.window.add_dock_widget(smoothen_filter, name = 'Smoothen Filter')
     viewer.window.add_dock_widget(threshold_neuron_widget, name = 'Thresholding')
+    viewer.window.add_dock_widget(reviewer_edit_widget, name = "Add Noise to Existing Labels")
     viewer.window.add_dock_widget(save_layer, name = 'Save Files')
     napari.run()
 
@@ -675,7 +724,7 @@ else:
 
     # GLOBAL VARIABLES
     VOLUME = neuron_image.copy()
-    NEURON_MASK = np.zeros_like(VOLUME)
+    # NEURON_MASK = np.zeros_like(VOLUME)
     z_projection_viewer = napari.Viewer()
     z_projection_viewer.window.add_dock_widget(generate_neuron_volume)
     # create a z projection of neuron volume max pixel intensities
