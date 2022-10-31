@@ -263,7 +263,8 @@ def threshold_neuron_widget(image: ImageData,
         
         if affected == 'noise':
             label_img = global_threshold_method(processed_image, threshold_method, 'noise')
-            label_img = despeckle_filter(label_img, speckle_method, radius)
+            if speckle_method != "None":
+                label_img = despeckle_filter(label_img, speckle_method, radius)
             listOfGlobals['NOISE'] = label_img.copy()
             listOfGlobals['NOISE_LABLED'] = True
 
@@ -275,9 +276,7 @@ def threshold_neuron_widget(image: ImageData,
                 ENTIRE_IMAGE = np.add(listOfGlobals['COMPLETED_LABEL'],listOfGlobals['NOISE'])
                 return (ENTIRE_IMAGE, {'name': 'Neuron_label'}, 'labels')
             else:
-                ENTIRE_IMAGE = COMPLETED_LABEL
-                return (ENTIRE_IMAGE, {'name': 'Neuron_label'}, 'labels')
-            # return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+                return (COMPLETED_LABEL, {'name': 'Neuron_label'}, 'labels')
 
         else:
             if listOfGlobals['NEURON_LABLED']:
@@ -509,7 +508,17 @@ def generate_mask():
     px_coord[rr, cc] = 1 # set all the rows and columns in the matrix as 1
     returnMask(px_coord, VOLUME.shape)
 
-    print("Mask Shape: ", Z_MASK.shape)
+@magicgui(
+    call_button = "Reset Autofluorescence",
+    layout = "vertical"
+)
+def reset_autofluorescence():
+    # find where all the autofluorescence is and delete them from the image
+    COMPLETED_LABEL[COMPLETED_LABEL==6] = 0 # reset all autofluorescent labels
+    COMPLETED_LABEL[COMPLETED_LABEL>7] = 0 # all labels greater than 7 (melanocytes)
+
+    return (COMPLETED_LABEL, {'name': 'Neuron_label'}, 'labels')
+
 
 ### Widget for using shapes to get segmentation
 @magicgui(
@@ -708,7 +717,7 @@ if os.path.splitext(file_path)[1] == '.h5':
     COMPLETED_LABEL = label_layer
     edit_labels.close()
 
-    reviewer_edit_widget = widgets.Container(widgets=[make_z_projection, generate_mask])
+    reviewer_edit_widget = widgets.Container(widgets=[make_z_projection, generate_mask, reset_autofluorescence])
 
     viewer.add_image(neuron_image, name = 'Neuron')
     viewer.add_labels(label_layer, name = 'Neuron_label')
