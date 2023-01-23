@@ -22,6 +22,8 @@ from processing.processing_functions import *
 import torch
 from torchvision import transforms, utils
 from torch.utils.data import DataLoader
+from monai.networks.nets import UNet
+from monai.inferers.inferer import SliceInferer
 
 
 # import all napari related stuff
@@ -71,34 +73,86 @@ def gamma_level(image, gamma):
     # by a factor "gamma".
     return exposure.adjust_gamma(image, gamma)
 
-def model_predict(image, mode):
+def model_predict(image, mode, spatial_dim):
     path = os.getcwd()
-    # use AI assistance
-    lateral_steps = 64
-    axial_steps = 16
-    patch_size = (axial_steps, lateral_steps, lateral_steps)
-    batch_size = 64
-    dim_order = (0,4,1,2,3)
-    orig_shape = image.shape
+    image = image*Z_MASK
+
+    if spatial_dim == 3:
+        # use AI assistance
+        lateral_steps = 64
+        axial_steps = 16
+        patch_size = (axial_steps, lateral_steps, lateral_steps)
+        batch_size = 64
+        dim_order = (0,4,1,2,3)
+        orig_shape = image.shape
+        
+        patch_transform = transforms.Compose([MinMaxScalerVectorized(),
+                                patch_imgs(xy_step = lateral_steps, z_step = axial_steps, patch_size = patch_size, is_mask = False)])
+
+        processed_test_img = MyImageDataset(raw_img = image,
+                                            transform = patch_transform,
+                                            img_order = dim_order)
+        
+        # img_dataloader = DataLoader(processed_test_img, batch_size = 1)
+
+        reconstructed_img = inference(processed_test_img,f'{path}/models/{mode}.onnx', batch_size, patch_size, orig_shape)
+        reconstructed_img = reconstructed_img.astype(int)
+
+        # soma category is inferenced for only "Neuron" => change all the soma labels (1) to dendrite labels (2)
+        if len(np.unique(reconstructed_img)) == 2:
+            reconstructed_img[reconstructed_img==1] = 2
+            return reconstructed_img, len(np.unique(reconstructed_img))+1
+        else:
+            return reconstructed_img, len(np.unique(reconstructed_img))
+
+    if spatial_dim == 2:
+        # currently lateral steps are fixed as 512 due to the model being trained on full slices of 512x512.
+        model_path = f'{path}/models/2D_{mode}.pth'
+
+        checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+        lateral_steps = 512
+        patch_size = (lateral_steps, lateral_steps)
+        batch_size = 1
+        input_chnl = 1
+        output_chnl = 4
+        norm_type = "batch"
+        dropout = 0.1
+
+        model = UNet(spatial_dims=2, 
+                    in_channels = input_chnl,
+                    out_channels = output_chnl,
+                    channels = (32, 64, 128, 256, 512),
+                    strides=(2, 2, 2, 2),
+                    num_res_units=2,
+                    norm = norm_type,
+                    dropout = dropout)
+
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to("cpu")
+        inferer = SliceInferer(roi_size=patch_size, sw_batch_size=batch_size, spatial_dim = 0, progress = True)
+
+        raw_transform = transforms.Compose([MinMaxScalerVectorized()])
+        processed_img_dataset = WholeVolumeDataset(raw_img=image,
+                                           raw_transform=raw_transform)
+        
+        processed_img, _ = next(iter(processed_img_dataset))
+        processed_img = torch.unsqueeze(processed_img, dim = 0)
+
+        with torch.no_grad():
+            output = inferer(inputs = processed_img, network=model)
+            print(output.shape)
+            probabilities = torch.softmax(output,1)
+            print(probabilities.shape)
+            pred = to_numpy(torch.argmax(probabilities, 1)).astype(np.int16)
+
+        # soma category is inferenced for only "Neuron" => change all the soma labels (1) to dendrite labels (2)
+        if len(np.unique(pred)) == 2:
+            pred[pred==1] = 2
+            return pred, len(np.unique(pred))+1
+        else:
+            return pred, len(np.unique(pred))
+
     
-    patch_transform = transforms.Compose([MinMaxScalerVectorized(),
-                            patch_imgs(xy_step = lateral_steps, z_step = axial_steps, patch_size = patch_size, is_mask = False)])
-
-    processed_test_img = MyImageDataset(raw_img = image,
-                                        transform = patch_transform,
-                                        img_order = dim_order)
-    
-    # img_dataloader = DataLoader(processed_test_img, batch_size = 1)
-
-    reconstructed_img = inference(processed_test_img,f'{path}/models/{mode}.onnx', batch_size, patch_size, orig_shape)
-    reconstructed_img = reconstructed_img.astype(int)
-
-    # soma category is inferenced for only "Neuron" => change all the soma labels (1) to dendrite labels (2)
-    if len(np.unique(reconstructed_img)) == 2:
-        reconstructed_img[reconstructed_img==1] = 2
-        return reconstructed_img, len(np.unique(reconstructed_img))+1
-    else:
-        return reconstructed_img, len(np.unique(reconstructed_img))
 
 def global_threshold_method(image, Threshold_Method, labelee):
     # global_threshold_method is a function that allows a user to choose what kind of method to binarize
@@ -200,6 +254,7 @@ def returnOffsetCorr(image):
     block_size = {"widget_type": "SpinBox", 'label': 'Block Size:', 'min': 1, 'max': 20},
     threshold_method = {"choices": ['None','Isodata', 'Li', 'Mean', 'Minimum', 'Otsu', 'Triangle', 'Yen']},
     AI_Assist = {"choices": ['None', 'Neuron', 'Soma+Dendrite', 'Soma+Dendrite+Filo']},
+    AI_model_dim = {"choices": ["2D","3D"]},
     speckle_method = {"choices": ['None','Erosion', 'Dilation', 'Opening', 'Closing']},
     radius = {"widget_type": "SpinBox", 'max': 10, 'label': 'Radius'},
     affected = {"choices": ['neuron', 'noise']},
@@ -210,10 +265,13 @@ def threshold_neuron_widget(image: ImageData,
                      ai_gamma = 1,
                      block_size = 3,
                      threshold_method = 'Otsu',
+                     small_object_count = 10,
                      AI_Assist = 'None',
+                     include_autofluorescence = False,
+                     AI_model_dim = "3D",
                      speckle_method = 'Erosion',
                      radius = 1,
-                     affected = 'neuron'
+                     affected = 'neuron',
                      ) -> LayerDataTuple:
     #function threshold_widget does a series of image processing and thresholding to binarize the neuron parts of the 
     #image and make a label while only affecting the noise or the neuron mask
@@ -235,24 +293,56 @@ def threshold_neuron_widget(image: ImageData,
         if affected == 'neuron':
             if threshold_method != "None":
                 label_img = global_threshold_method(processed_image, threshold_method, 'neuron')
+                label_img = morphology.remove_small_objects(label_img, min_size=small_object_count)
             else:
                 label_img = np.zeros(processed_image.shape)
 
             if AI_Assist != 'None':
-                model_img, num_classes = model_predict(ai_image, AI_Assist)
-                if threshold_method == "None":
-                    label_img = model_img
-                else:
-                    model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
-                    tmp_label_img = to_categorical(label_img, num_classes=num_classes).astype(bool)
-                    tmp_categorical = np.zeros(model_img.shape)
-                    for i in range(num_classes):
-                        if i == 0:
-                            tmp_categorical[...,i] = model_img[...,i]*tmp_label_img[...,i] # "AND" background
-                        else:
-                            tmp_categorical[...,i] = model_img[...,i]+tmp_label_img[...,i] # "OR" every other label
+                if AI_model_dim == "3D":
+                    spatial_dim = 3
+                    model_img, num_classes = model_predict(ai_image, AI_Assist, spatial_dim)
+                    if threshold_method == "None":
+                        label_img = model_img
+                    else:
+                        model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
+                        tmp_label_img = to_categorical(label_img, num_classes=num_classes).astype(bool)
+                        tmp_categorical = np.zeros(model_img.shape)
+                        for i in range(num_classes):
+                            if i == 0:
+                                tmp_categorical[...,i] = model_img[...,i]*tmp_label_img[...,i] # "AND" background
+                            else:
+                                tmp_categorical[...,i] = model_img[...,i]+tmp_label_img[...,i] # "OR" every other label
 
-                    label_img = np.argmax(tmp_categorical,axis=-1)
+                        label_img = np.argmax(tmp_categorical,axis=-1)
+
+                if AI_model_dim == "2D": # use the 2D equivalent to the 3D model i.e., 2D unet for slice inference
+                    spatial_dim = 2
+                    model_img, num_classes = model_predict(ai_image, AI_Assist, spatial_dim)
+                    model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
+
+                    # clean up any false positives or extremely small objects identified as dendrites
+                    model_img[...,2] = morphology.remove_small_objects(model_img[...,2], min_size=small_object_count)
+                    model_img = np.argmax(model_img,axis=-1) 
+
+                    if include_autofluorescence == False:
+                        # find the max class and make everywhere that has autofluorescence to be 0
+                        autofluor = model_img.max()
+                        model_img[model_img==autofluor] = 0
+
+                    if threshold_method == "None":
+                        label_img = model_img
+                    else:
+                        model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
+                        tmp_label_img = to_categorical(label_img, num_classes=num_classes).astype(bool)
+                        tmp_categorical = np.zeros(model_img.shape)
+                        for i in range(num_classes):
+                            if i == 0:
+                                tmp_categorical[...,i] = model_img[...,i]*tmp_label_img[...,i] # "AND" background
+                            else:
+                                tmp_categorical[...,i] = model_img[...,i]+tmp_label_img[...,i] # "OR" every other label
+
+                        label_img = np.argmax(tmp_categorical,axis=-1)
+
             
             if speckle_method != "None":
                 label_img = despeckle_filter(label_img, speckle_method, radius)
