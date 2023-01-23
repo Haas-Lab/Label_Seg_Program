@@ -54,6 +54,7 @@ class MyImageDataset(Dataset):
                 print("reading in existing image")
                 idx = 0
                 x = self.raw_img.astype(np.float16)
+
             upper_img, upper_shape, lower_img, lower_shape = self.transform(x)
             upper, lower = torch.FloatTensor(upper_img).to(self.device), torch.FloatTensor(lower_img).to(self.device) 
             # upper, lower = torch.FloatTensor(upper_img), torch.FloatTensor(lower_img)
@@ -70,6 +71,67 @@ class MyImageDataset(Dataset):
             upper_mask, lower_mask = torch.permute(upper_mask, self.mask_order), torch.permute(lower_mask, self.mask_order)
             
         return dict(zip(list(range(len(upper))), upper)), upper_shape, dict(zip(list(range(len(lower))),lower)), lower_shape, mask, dict(zip(list(range(len(upper_mask))),upper_mask)), dict(zip(list(range(len(lower_mask))),lower_mask))
+
+class WholeVolumeDataset(Dataset):
+    # this Dataset module accepts a list of raw image filenames and reads in the image one at a time
+
+    def __init__(self, 
+                 raw_directory = [],
+                 raw_img = None, 
+                 mask_directory = [], 
+                 num_classes = None, 
+                 raw_transform = None, 
+                 label_transform = None, 
+                 mask_order = (0,4,1,2,3), 
+                 device = "cpu"):
+
+        self.raw_img_list = raw_directory
+        self.raw_img = raw_img
+        self.mask_list = mask_directory
+        self.num_classes = num_classes
+        self.raw_transform = raw_transform
+        self.label_transform = label_transform
+        self.mask_order = mask_order
+        self.device = device
+
+    def __len__(self):
+        if self.raw_img_list != None:
+            return len(self.raw_list)
+        else:
+            return 0
+
+    def __getitem__(self, idx):
+
+        # read and process the raw image
+        if self.raw_img is None: # check if there is already a raw image
+            print("reading from list")
+            image = tifffile.imread(self.img_list[idx]).astype(np.float16) # raw image shape = (Batch Size, Z_size, Y_size, X_size)
+        else: # pick from a string instead
+            print("reading in existing image")
+            idx = 0
+            image = self.raw_img.astype(np.float16) # shape = (Batch Size, Z_size, Y_size, X_size)
+
+        if self.raw_transform:
+            image = self.raw_transform(image)
+            image = torch.FloatTensor(image).to(self.device) # type = np.array
+            image = torch.unsqueeze(image, dim =0)
+        # image = torch.permute(image, self.img_order) # (Batch Size, Channel, Z_size, Y_size, X_size)
+        # print(self.img_list[idx])
+
+        if self.mask_list != []:
+            print("Reading Mask from list")
+            # read and process the image mask
+            mask = tifffile.imread(self.mask_list[idx]).astype(np.float16)
+            if self.label_transform:
+                mask = self.label_transform(mask)
+        
+            mask = torch.FloatTensor(to_categorical(mask, self.num_classes)).to(self.device)
+            mask = torch.unsqueeze(mask,0)
+            mask = torch.permute(mask, self.mask_order)
+        else:
+            mask = None
+        # print(self.mask_list[idx])
+        return image, mask
 
 class MinMaxScalerVectorized(object):
     # def __call__(self,tensor):
