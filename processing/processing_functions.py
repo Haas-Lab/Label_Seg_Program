@@ -96,7 +96,7 @@ class WholeVolumeDataset(Dataset):
 
     def __len__(self):
         if self.raw_img_list != None:
-            return len(self.raw_list)
+            return len(self.raw_img_list)
         else:
             return 0
 
