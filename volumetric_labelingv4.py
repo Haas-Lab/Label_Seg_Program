@@ -23,7 +23,7 @@ import torch
 from torchvision import transforms, utils
 from torch.utils.data import DataLoader
 from monai.networks.nets import UNet
-from monai.inferers.inferer import SliceInferer
+from monai.inferers.inferer import SliceInferer, SlidingWindowInferer
 
 
 # import all napari related stuff
@@ -61,6 +61,8 @@ global COMPLETED_LABEL
 COMPLETED_LABEL = None
 global EDIT_EXISTING_LABEL
 EDIT_EXISTING_LABEL = False
+global AI_PREDICTION
+AI_PREDICTION = None
 
 def adaptive_local_threshold(image, block_size):
     # adaptive_local_threshold is a function that takes in an image and applies an odd-integer block size
@@ -68,90 +70,108 @@ def adaptive_local_threshold(image, block_size):
 
     return filters.threshold_local(image, block_size)
 
+def adaptive_threshold_3d(volume, block_size, offset=0, filter_sigma=None):
+    if block_size % 2 == 0:
+        raise ValueError("Block size should be an odd number")
+
+    if filter_sigma is not None:
+        local_mean = ndimage.gaussian_filter(volume, filter_sigma)
+    else:
+        half_block_size = block_size // 2
+        padded_volume = np.pad(volume, ((half_block_size, half_block_size),) * 3, mode='reflect')
+        local_mean = ndimage.uniform_filter(padded_volume, size=block_size, mode='constant')
+
+        # Remove padding from local_mean
+        local_mean = local_mean[
+            half_block_size:local_mean.shape[0] - half_block_size,
+            half_block_size:local_mean.shape[1] - half_block_size,
+            half_block_size:local_mean.shape[2] - half_block_size
+        ]
+
+    return (volume > local_mean + offset).astype(np.uint8)
+
 def gamma_level(image, gamma):
     # gamma_level is a function that takes in an image and changes the contrast by scaling the image
     # by a factor "gamma".
     return exposure.adjust_gamma(image, gamma)
 
+def get_adjusted_image(layer: Image):
+    # get the shape of the data
+    # normalize data by contrast lims
+    normalized_data = (layer.data - layer.contrast_limits[0]) / (layer.contrast_limits[1] - layer.contrast_limits[0])
+    
+    # clip the values to [0, 1] range
+    clipped_data = np.clip(normalized_data, 0, 1)
+    # apply gamma correction
+    gamma_corrected_data = clipped_data ** layer.gamma
+    
+    # get the original min and max values of the data type
+    min_val, max_val = layer.contrast_limits_range
+
+    # scale the data by the original range
+    scaled_data = gamma_corrected_data * (max_val - min_val) + min_val
+    
+    return scaled_data
+
 def model_predict(image, mode, spatial_dim):
     path = os.getcwd()
     image = image*Z_MASK
 
-    if spatial_dim == 3:
-        # use AI assistance
-        lateral_steps = 64
-        axial_steps = 16
+    # load yaml file required for getting configurations of the model
+    yaml_file = f'{path}/models/{mode}_{spatial_dim}_ResUNet.yml'
+    import yaml
+    from yaml.loader import SafeLoader
+    with open(yaml_file) as f:
+        config = yaml.load(f, Loader=SafeLoader)
+
+    lateral_steps = config['DATASET']['lateral_steps']
+    axial_steps = config['DATASET']['axial_steps']
+    batch_size = config['DATASET']['batch_size']
+    input_chnl = 1
+    output_chnl = 4
+    norm_type = config['MODEL']['norm']
+    dropout = config['MODEL']['dropout']
+
+    # define the UNET model
+    model = UNet(spatial_dims=config['MODEL']['spatial_dim'], 
+                in_channels = input_chnl,
+                out_channels = output_chnl,
+                channels = config['MODEL']['channel_layers'],
+                strides=config['MODEL']['strides'],
+                num_res_units=config['MODEL']['num_res_units'],
+                norm = norm_type,
+                dropout = dropout)
+    model_path = f'{path}/models/{mode}_{spatial_dim}_ResUNet.pth'
+    checkpoint = torch.load(model_path, map_location="cpu")
+    model.load_state_dict(checkpoint['model_state_dict'])
+
+    if config['MODEL']['spatial_dim'] == 3:
         patch_size = (axial_steps, lateral_steps, lateral_steps)
-        batch_size = 64
-        dim_order = (0,4,1,2,3)
-        orig_shape = image.shape
-        
-        patch_transform = transforms.Compose([MinMaxScalerVectorized(),
-                                patch_imgs(xy_step = lateral_steps, z_step = axial_steps, patch_size = patch_size, is_mask = False)])
-
-        processed_test_img = MyImageDataset(raw_img = image,
-                                            transform = patch_transform,
-                                            img_order = dim_order)
-        
-        # img_dataloader = DataLoader(processed_test_img, batch_size = 1)
-
-        reconstructed_img = inference(processed_test_img,f'{path}/models/{mode}.onnx', batch_size, patch_size, orig_shape)
-        reconstructed_img = reconstructed_img.astype(int)
-
-        # soma category is inferenced for only "Neuron" => change all the soma labels (1) to dendrite labels (2)
-        if len(np.unique(reconstructed_img)) == 2:
-            reconstructed_img[reconstructed_img==1] = 2
-            return reconstructed_img, len(np.unique(reconstructed_img))+1
-        else:
-            return reconstructed_img, len(np.unique(reconstructed_img))
-
-    if spatial_dim == 2:
-        # currently lateral steps are fixed as 512 due to the model being trained on full slices of 512x512.
-        model_path = f'{path}/models/2D_{mode}.pth'
-
-        checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-        lateral_steps = 512
+        inferer = SlidingWindowInferer(roi_size=patch_size, sw_batch_size=batch_size, progress=True)
+    else:
         patch_size = (lateral_steps, lateral_steps)
-        batch_size = 1
-        input_chnl = 1
-        output_chnl = 4
-        norm_type = "batch"
-        dropout = 0.1
+        inferer = SliceInferer(roi_size=patch_size, sw_batch_size=batch_size, spatial_dim = 0, progress=True)
 
-        model = UNet(spatial_dims=2, 
-                    in_channels = input_chnl,
-                    out_channels = output_chnl,
-                    channels = (32, 64, 128, 256, 512),
-                    strides=(2, 2, 2, 2),
-                    num_res_units=2,
-                    norm = norm_type,
-                    dropout = dropout)
+    raw_transform = transforms.Compose([MinMaxScalerVectorized()])
+    processed_img_dataset = WholeVolumeDataset(raw_img=image,
+                                               raw_transform=raw_transform)
 
-        model.load_state_dict(checkpoint['model_state_dict'])
-        model = model.to("cpu")
-        inferer = SliceInferer(roi_size=patch_size, sw_batch_size=batch_size, spatial_dim = 0, progress = True)
+    processed_img, _ = next(iter(processed_img_dataset))
+    processed_img = torch.unsqueeze(processed_img, dim = 0)
 
-        raw_transform = transforms.Compose([MinMaxScalerVectorized()])
-        processed_img_dataset = WholeVolumeDataset(raw_img=image,
-                                           raw_transform=raw_transform)
-        
-        processed_img, _ = next(iter(processed_img_dataset))
-        processed_img = torch.unsqueeze(processed_img, dim = 0)
+    with torch.no_grad():
+        output = inferer(inputs = processed_img, network=model)
+        # print(output.shape)
+        probabilities = torch.softmax(output,1)
+        # print(probabilities.shape)
+        pred = to_numpy(torch.argmax(probabilities, 1)).astype(np.int16)
 
-        with torch.no_grad():
-            output = inferer(inputs = processed_img, network=model)
-            print(output.shape)
-            probabilities = torch.softmax(output,1)
-            print(probabilities.shape)
-            pred = to_numpy(torch.argmax(probabilities, 1)).astype(np.int16)
-
-        # soma category is inferenced for only "Neuron" => change all the soma labels (1) to dendrite labels (2)
-        if len(np.unique(pred)) == 2:
-            pred[pred==1] = 2
-            return pred, len(np.unique(pred))+1
-        else:
-            return pred, len(np.unique(pred))
-
+    # soma category is inferenced for only "Neuron" => change all the soma labels (1) to dendrite labels (2)
+    if len(np.unique(pred)) == 2:
+        pred[pred==1] = 2
+        return pred, len(np.unique(pred))+1
+    else:
+        return pred, len(np.unique(pred))
     
 
 def global_threshold_method(image, Threshold_Method, labelee):
@@ -160,26 +180,28 @@ def global_threshold_method(image, Threshold_Method, labelee):
     # image.
     if Threshold_Method == 'None':
         return image
-    if Threshold_Method == 'Isodata':
+    elif Threshold_Method == 'Isodata':
         thresh = filters.threshold_isodata(image) # calculate threshold using isodata method
-    if Threshold_Method == 'Li':
+    elif Threshold_Method == 'Li':
         thresh = filters.threshold_li(image) # calculate threshold using isodata method
-    if Threshold_Method == 'Mean':
+    elif Threshold_Method == 'Mean':
         thresh = filters.threshold_mean(image) # calculate threshold using isodata method
-    if Threshold_Method == 'Minimum':
+    elif Threshold_Method == 'Minimum':
         thresh = filters.threshold_minimum(image)
-    if Threshold_Method == 'Otsu':
+    elif Threshold_Method == 'Otsu':
         thresh = filters.threshold_otsu(image)
-    if Threshold_Method == 'Yen':
+        print("threshold value: ", thresh)
+    elif Threshold_Method == 'Yen':
         thresh = filters.threshold_yen(image)
-    if Threshold_Method == 'Triangle':
+    elif Threshold_Method == 'Triangle':
         thresh = filters.threshold_triangle(image)
     else:
         thresh = 0
 
     tmp_img = image.copy()
-    tmp_img = binary_labels(tmp_img, labelee)
     tmp_img[tmp_img<=thresh]=0
+    tmp_img = binary_labels(tmp_img, labelee)
+    
     return tmp_img
 
 def despeckle_filter(image, filter_method, radius):
@@ -234,7 +256,7 @@ def binary_labels(image, labelee):
         
     if labelee == 'noise': 
         labels_array[neuron > 0] = 0   
-        labels_array[auto > 0] = 6
+        labels_array[auto > 0] = 9
         
     labels_array = labels_array.astype('int')
     return labels_array
@@ -249,27 +271,32 @@ def returnOffsetCorr(image):
 
 @magicgui(
     image = {'label': 'Image'},
-    raw_gamma = {"widget_type": "FloatSlider", 'max': 5},
-    ai_gamma = {"widget_type": "FloatSlider", 'max': 5},
-    block_size = {"widget_type": "SpinBox", 'label': 'Block Size:', 'min': 1, 'max': 20},
-    threshold_method = {"choices": ['None','Isodata', 'Li', 'Mean', 'Minimum', 'Otsu', 'Triangle', 'Yen']},
+    # raw_gamma = {"widget_type": "FloatSlider", 'max': 5},
+    # ai_gamma = {"widget_type": "FloatSlider", 'max': 5},
+    threshold_method = {"choices": ['None','Local','Isodata', 'Li', 'Mean', 'Minimum', 'Otsu', 'Triangle', 'Yen']},
+    block_size = {"widget_type": "SpinBox", 'label': 'Block Size:', 'step': 2, 'min': 1, 'max': 100, 'visible':False},
+    small_object_count = {"widget_type": "SpinBox", 'label': 'Min Cluster Size:', 'min': 0, 'max': 200},
     AI_Assist = {"choices": ['None', 'Neuron', 'Soma+Dendrite', 'Soma+Dendrite+Filo']},
+    allow_rerun={"label": "Allow rerun", "nullable": True},
     AI_model_dim = {"choices": ["2D","3D"]},
     speckle_method = {"choices": ['None','Erosion', 'Dilation', 'Opening', 'Closing']},
     radius = {"widget_type": "SpinBox", 'max': 10, 'label': 'Radius'},
     affected = {"choices": ['neuron', 'noise']},
     layout = 'vertical'
  )
-def threshold_neuron_widget(image: ImageData,
-                     raw_gamma = 1,
-                     ai_gamma = 1,
-                     block_size = 3,
+def threshold_neuron_widget(
+                    #  image: ImageData,
+                     image: Image,
+                    #  raw_gamma = 1.0,
+                    #  ai_gamma = 1.0,
+                     block_size = 1,
                      threshold_method = 'Otsu',
-                     small_object_count = 10,
+                     small_object_count = 0,
                      AI_Assist = 'None',
+                     allow_rerun: bool = True,
                      include_autofluorescence = False,
-                     AI_model_dim = "3D",
-                     speckle_method = 'Erosion',
+                     AI_model_dim = "2D",
+                     speckle_method = 'None',
                      radius = 1,
                      affected = 'neuron',
                      ) -> LayerDataTuple:
@@ -277,47 +304,49 @@ def threshold_neuron_widget(image: ImageData,
     #image and make a label while only affecting the noise or the neuron mask
     print(affected)
     if image is not None:
-
         listOfGlobals = globals()
-        
         # adjust the gamma levelz
-        processed_image = gamma_level(image, raw_gamma)
-        ai_image = gamma_level(image, ai_gamma)
-
-        # go through the stack and perform the local threshold
-        for curr_stack in range(np.shape(processed_image)[0]):
-            processed_image[curr_stack] = adaptive_local_threshold(processed_image[curr_stack], block_size)
+        # processed_image = gamma_level(image, raw_gamma)
+        processed_image = get_adjusted_image(image)
+        processed_image = np.rint(processed_image)
 
         # finally do a global threshold to calculate optimized value to make it black/white
 
         if affected == 'neuron':
             if threshold_method != "None":
-                label_img = global_threshold_method(processed_image, threshold_method, 'neuron')
-                label_img = morphology.remove_small_objects(label_img, min_size=small_object_count)
+                if threshold_method == "Local":
+                    label_img = np.zeros(processed_image.shape)
+                    # for curr_stack in range(np.shape(label_img)[0]):
+                    #     local_thresh = adaptive_local_threshold(processed_image[curr_stack], block_size)
+                    #     label_img[curr_stack] = processed_image[curr_stack] > local_thresh
+                    label_img = adaptive_threshold_3d(processed_image,block_size)
+                    label_img = binary_labels(label_img, affected)
+                    # remove small objects
+                    label_img = morphology.label(label_img)
+                    label_img = morphology.remove_small_objects(label_img, min_size=small_object_count)
+                    label_img[label_img > 0] = 2
+                else:
+                    label_img = np.zeros(processed_image.shape)
+                    label_img = global_threshold_method(processed_image, threshold_method, affected)
+                    # remove small objects
+                    label_img = morphology.label(label_img)
+                    label_img = morphology.remove_small_objects(label_img, min_size=small_object_count)
+                    label_img[label_img > 0] = 2
+                
             else:
-                label_img = np.zeros(processed_image.shape)
+                label_img = np.zeros(processed_image.shape).astype(np.int8)
 
             if AI_Assist != 'None':
-                if AI_model_dim == "3D":
-                    spatial_dim = 3
-                    model_img, num_classes = model_predict(ai_image, AI_Assist, spatial_dim)
-                    if threshold_method == "None":
-                        label_img = model_img
-                    else:
-                        model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
-                        tmp_label_img = to_categorical(label_img, num_classes=num_classes).astype(bool)
-                        tmp_categorical = np.zeros(model_img.shape)
-                        for i in range(num_classes):
-                            if i == 0:
-                                tmp_categorical[...,i] = model_img[...,i]*tmp_label_img[...,i] # "AND" background
-                            else:
-                                tmp_categorical[...,i] = model_img[...,i]+tmp_label_img[...,i] # "OR" every other label
+                if AI_Assist == "Soma+Dendrite":
+                    num_classes = 4
+                if AI_Assist == "Soma+Dendrite+Filo":
+                    num_classes = 5
 
-                        label_img = np.argmax(tmp_categorical,axis=-1)
-
-                if AI_model_dim == "2D": # use the 2D equivalent to the 3D model i.e., 2D unet for slice inference
-                    spatial_dim = 2
-                    model_img, num_classes = model_predict(ai_image, AI_Assist, spatial_dim)
+                if allow_rerun == True:
+                    
+                    ai_image = processed_image
+                    # if AI_model_dim == "2D": # use the 2D equivalent to the 3D model i.e., 2D unet for slice inference
+                    model_img, num_classes = model_predict(ai_image, AI_Assist, AI_model_dim)
                     model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
 
                     # clean up any false positives or extremely small objects identified as dendrites
@@ -328,7 +357,23 @@ def threshold_neuron_widget(image: ImageData,
                         # find the max class and make everywhere that has autofluorescence to be 0
                         autofluor = model_img.max()
                         model_img[model_img==autofluor] = 0
+                    listOfGlobals['AI_PREDICTION'] = model_img
+                    threshold_neuron_widget.allow_rerun.value = False #uncheck the box for rerunning
+                    if threshold_method == "None":
+                        label_img = model_img
+                    else:
+                        model_img = to_categorical(model_img,num_classes=num_classes).astype(bool)
+                        tmp_label_img = to_categorical(label_img, num_classes=num_classes).astype(bool)
+                        tmp_categorical = np.zeros(model_img.shape)
+                        for i in range(num_classes):
+                            if i == 0:
+                                tmp_categorical[...,i] = model_img[...,i]*tmp_label_img[...,i] # "AND" background
+                            else:
+                                tmp_categorical[...,i] = model_img[...,i]+tmp_label_img[...,i] # "OR" every other label
 
+                        label_img = np.argmax(tmp_categorical,axis=-1)
+                else:
+                    model_img = listOfGlobals['AI_PREDICTION']
                     if threshold_method == "None":
                         label_img = model_img
                     else:
@@ -343,18 +388,20 @@ def threshold_neuron_widget(image: ImageData,
 
                         label_img = np.argmax(tmp_categorical,axis=-1)
 
-            
             if speckle_method != "None":
                 label_img = despeckle_filter(label_img, speckle_method, radius)
             
             listOfGlobals['NEURON'] = label_img.copy()
             listOfGlobals['NEURON_LABLED'] = True
-
         
         if affected == 'noise':
+            label_img = np.zeros(processed_image.shape)
             label_img = global_threshold_method(processed_image, threshold_method, 'noise')
             if speckle_method != "None":
                 label_img = despeckle_filter(label_img, speckle_method, radius)
+            label_img = morphology.label(label_img)
+            label_img = morphology.remove_small_objects(label_img, min_size=small_object_count)
+            label_img[label_img > 0] = 9
             listOfGlobals['NOISE'] = label_img.copy()
             listOfGlobals['NOISE_LABLED'] = True
 
@@ -379,6 +426,7 @@ def threshold_neuron_widget(image: ImageData,
             else:
                 ENTIRE_IMAGE = listOfGlobals['NOISE']
                 return (ENTIRE_IMAGE, {'name': 'neuron_label'}, 'labels')
+
 
 
 #### WIDGET FOR PROCESSING IMAGE AND SHOWING THE PROCESSED IMAGE BEFORE SEGMENTATION
@@ -428,16 +476,23 @@ def change_label(event):
     # change_label function is written to change the label of the FloatSlider widget
     # such that the user won't be confused as to what metric is being used.
 
-    if event.value == 'median':
+    if event == 'median':
         smoothen_filter.value_slider.label = 'Pixel Radius'
-    if event.value == 'gaussian':
+    if event == 'gaussian':
         smoothen_filter.value_slider.label = 'sigma'
-    if event.value == 'bilateral':
+    if event == 'bilateral':
         smoothen_filter.value_slider.label = 'sigma_spatial'
-    if event.value == 'TV':
+    if event == 'TV':
         smoothen_filter.value_slider.label = 'weight'
         smoothen_filter.value_slider.max = 1
         smoothen_filter.value_slider.value = 0
+
+@threshold_neuron_widget.threshold_method.changed.connect
+def on_method_changed(event):
+    if event == "Local":
+        threshold_neuron_widget.block_size.visible = True
+    else:
+        threshold_neuron_widget.block_size.visible = False
 
 @magicgui(
     call_button = 'Run Ilastik',
@@ -679,7 +734,7 @@ def save_layer(image: ImageData,
                 'Growth Cone' : 5,
                 'Autofluorescence' : 6,
                 'Melanocyte' : 7,
-                'Noise' : 8,
+                'Noise' : 9,
         }
 
     if os.path.isfile(full_dir): # if the file exists and layer needs to be overwritten
@@ -691,7 +746,7 @@ def save_layer(image: ImageData,
         raw_image_data = hf['project_data']['raw_image'] # read into raw_image data
 
         # overwrite label data
-        new_label = label.data # new labelled data
+        new_label = label.data
         curr_label = hf['project_data']['label'] # read into label data
         curr_label[:] = new_label
         print('Overwritten previous labels with current labels!')
@@ -720,7 +775,7 @@ def save_layer(image: ImageData,
         print('Updated Metadata or have Created new metadata only: ')
         print(list(project_data.attrs.items()))
         print(list(raw_image_data.attrs.items()))
-        print(list(curr_label.attrs.items()))
+        # print(list(curr_label.attrs.items()))
         hf.close()
 
         # check if changes were properly made:
