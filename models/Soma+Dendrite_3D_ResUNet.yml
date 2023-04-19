@@ -1,0 +1,60 @@
+DATASET:
+  AUGMENTATION:
+    augment: true
+    gamma_lower: -0.5
+    gamma_upper: 0.6
+    mean_noise: 0.004357355181127787
+    std_noise: 0.02553257718682289
+    x_deg: 0
+    y_deg: 0
+    z_deg: 25
+  artifacts:
+  - 7
+  axial_steps: 32
+  batch_size: 64
+  ex_autofluorescence: false
+  ex_melanocytes: true
+  exp: +s_+d_-f
+  folds: null
+  lateral_steps: 64
+  mean: 0.004357355181127787
+  precompute_stats: true
+  remove_artifacts: false
+  std: 0.02553257718682289
+  x_patch: 64
+  y_patch: 64
+  z_patch: 32
+MODEL:
+  channel_layers:
+  - 64
+  - 128
+  - 256
+  - 512
+  - 1024
+  dropout: 0.1
+  input_dim: 1
+  l2: 0.0042
+  learning_rate: 7.54e-05
+  model_arch: UNET
+  norm: instance
+  num_res_units: 2
+  spatial_dim: 3
+  strides:
+  - 2
+  - 2
+  - 2
+  - 2
+RESULTS:
+  log_file_path: /home/jsfung/projects/def-haas/jsfung/results/ResUNet/20230322/32_64_64_+s_+d_-f/002523_log_fold
+  model_states_path: /home/jsfung/projects/def-haas/jsfung/results/ResUNet/20230322/32_64_64_+s_+d_-f/20230322_002523_+s_+d_-f_3D_ResUNet_109.pth
+TRAINING:
+  shuffle: true
+date: '20230322_002523'
+end_cycle: 20
+loss: dice_ce
+mask_path: /home/jsfung/projects/def-haas/jsfung/Images/new_labels/Mask/*.tif
+max_epochs: 200
+model_name: ResUNet
+parent_dir: /home/haas/projects/def-haas/jsfung
+raw_path: /home/jsfung/projects/def-haas/jsfung/Images/new_labels/Raw/*.tif
+weights: null
