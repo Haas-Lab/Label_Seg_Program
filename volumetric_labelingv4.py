@@ -118,7 +118,7 @@ def model_predict(image, mode, spatial_dim):
     image = image*Z_MASK
 
     # load yaml file required for getting configurations of the model
-    yaml_file = f'{path}/models/{mode}_{spatial_dim}_ResUNet.yml'
+    yaml_file = f'{path}/production_models/{mode}_{spatial_dim}_ResUNet.yml'
     import yaml
     from yaml.loader import SafeLoader
     with open(yaml_file) as f:
@@ -141,7 +141,7 @@ def model_predict(image, mode, spatial_dim):
                 num_res_units=config['MODEL']['num_res_units'],
                 norm = norm_type,
                 dropout = dropout)
-    model_path = f'{path}/models/{mode}_{spatial_dim}_ResUNet.pth'
+    model_path = f'{path}/production_models/{mode}_{spatial_dim}_ResUNet.pth'
     checkpoint = torch.load(model_path, map_location="cpu")
     model.load_state_dict(checkpoint['model_state_dict'])
 
@@ -285,10 +285,7 @@ def returnOffsetCorr(image):
     layout = 'vertical'
  )
 def threshold_neuron_widget(
-                    #  image: ImageData,
                      image: Image,
-                    #  raw_gamma = 1.0,
-                    #  ai_gamma = 1.0,
                      block_size = 1,
                      threshold_method = 'Otsu',
                      small_object_count = 0,
@@ -875,6 +872,8 @@ if os.path.splitext(file_path)[1] == '.h5':
 else:
     z_projection_made = False
     neuron_image = skimage.io.imread(file_path)
+    if len(neuron_image.shape) == 4:
+        neuron_image = np.average(neuron_image,axis=1)
 
     # GLOBAL VARIABLES
     VOLUME = neuron_image.copy()
